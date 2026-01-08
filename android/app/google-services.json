@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "951321330093",
+    "project_id": "tik-tak-toe-eccf4",
+    "storage_bucket": "tik-tak-toe-eccf4.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:951321330093:android:77f8c6f4a0191e11fde124",
+        "android_client_info": {
+          "package_name": "com.example.tic_tac_toe_v"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyDOQTFafR5BkbVt2Y-8PFIeTz9-159Dlnc"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

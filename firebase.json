@@ -1,0 +1,37 @@
+{
+  "flutter": {
+    "platforms": {
+      "android": {
+        "default": {
+          "projectId": "tik-tak-toe-eccf4",
+          "appId": "1:951321330093:android:77f8c6f4a0191e11fde124",
+          "fileOutput": "android/app/google-services.json"
+        }
+      },
+      "dart": {
+        "lib/firebase_options.dart": {
+          "projectId": "tik-tak-toe-eccf4",
+          "configurations": {
+            "android": "1:951321330093:android:77f8c6f4a0191e11fde124",
+            "ios": "1:951321330093:ios:b0ad3354a2355beefde124",
+            "web": "1:951321330093:web:588d9e586c72ad32fde124"
+          }
+        }
+      }
+    }
+  },
+  "hosting": {
+    "public": "build/web",
+    "ignore": [
+      "firebase.json",
+      "**/.*",
+      "**/node_modules/**"
+    ],
+    "rewrites": [
+      {
+        "source": "**",
+        "destination": "/index.html"
+      }
+    ]
+  }
+}
