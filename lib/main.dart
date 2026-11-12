@@ -1,46 +1,47 @@
 import 'package:firebase_core/firebase_core.dart';
 import 'package:flutter/material.dart';
-import 'package:tic_tac_toe_v/firebase_options.dart';
-import 'package:tic_tac_toe_v/pages/home_page.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'core/routing/app_router.dart';
+import 'core/theme/app_theme.dart';
+import 'firebase_options.dart';
+import 'services/local_cache_service.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
 
-  // initialize the firebase
-  await Firebase.initializeApp(
-    options: DefaultFirebaseOptions.currentPlatform
-  );
+  // Initialize Firebase with platform-specific options (Android, iOS, Web)
+  try {
+    await Firebase.initializeApp(
+      options: DefaultFirebaseOptions.currentPlatform,
+    );
+  } catch (e) {
+    debugPrint('Firebase init error: $e');
+  }
 
-  // finally run the app
-  runApp(const MyApp());
+  // Initialize Hive offline persistence
+  await LocalCacheService.init();
+
+  runApp(
+    const ProviderScope(
+      child: MyApp(),
+    ),
+  );
 }
 
-
-class MyApp extends StatelessWidget {
+class MyApp extends ConsumerWidget {
   const MyApp({super.key});
 
   @override
-  Widget build(BuildContext context) {
-    return MaterialApp(
+  Widget build(BuildContext context, WidgetRef ref) {
+    final router = ref.watch(routerProvider);
+
+    return MaterialApp.router(
+      title: 'Tik Tak Toe',
       debugShowCheckedModeBanner: false,
-      theme: ThemeData.light().copyWith(
-        scaffoldBackgroundColor: Colors.grey.shade300,
-        colorScheme: ColorScheme.light(
-          primary: Colors.grey.shade300,
-          inversePrimary: Colors.grey.shade100,
-          secondary: Colors.grey.shade600
-        )
-      ),
-      darkTheme: ThemeData.dark().copyWith(
-        scaffoldBackgroundColor: Colors.grey.shade800,
-        colorScheme: ColorScheme.dark(
-          primary: Colors.grey.shade800,
-          inversePrimary: Colors.grey.shade700,
-          secondary: Colors.grey.shade900
-        )
-      ),
-      home: HomePage(),
+      theme: AppTheme.lightTheme,
+      darkTheme: AppTheme.darkTheme,
       themeMode: ThemeMode.system,
+      routerConfig: router,
     );
   }
 }

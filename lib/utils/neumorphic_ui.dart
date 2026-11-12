@@ -12,7 +12,7 @@ BoxDecoration neumorphicDecoration(BuildContext context) {
       ),
       BoxShadow(
         color: Theme.of(context).colorScheme.inversePrimary,
-        offset: Offset(-4, -4),
+        offset: const Offset(-4, -4),
         blurRadius: 6,
       ),
     ],

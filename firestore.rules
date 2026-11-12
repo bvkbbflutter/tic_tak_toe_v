@@ -1,0 +1,486 @@
+rules_version = '2';
+
+// ===============================================================
+// Assumed Data Model
+// ===============================================================
+//
+// Collection: users
+// Document ID: {uid} (Firebase Auth UID)
+// Fields:
+//   - uid: string (required, 1-128 chars, immutable) - user's auth UID
+//   - playerId: string (required, 3-20 chars) - unique player code (e.g., TTT-12345)
+//   - username: string (required, 1-30 chars) - search handle
+//   - displayName: string (required, 1-50 chars) - display name
+//   - photoUrl: string (optional, 0-500 chars) - avatar URL
+//   - gender: string (optional, 0-50 chars) - gender preference
+//   - bio: string (optional, 0-250 chars) - player bio
+//   - country: string (optional, 0-100 chars) - player country
+//   - level: number (optional, >= 1) - player level
+//   - xp: number (optional, >= 0) - experience points
+//   - totalMatches: number (optional, >= 0) - total games played
+//   - wins: number (optional, >= 0) - total wins
+//   - losses: number (optional, >= 0) - total losses
+//   - draws: number (optional, >= 0) - total draws
+//   - currentStreak: number (optional, >= 0) - active win streak
+//   - bestStreak: number (optional, >= 0) - highest win streak
+//   - isOnline: bool (optional) - presence status
+//   - isInGame: bool (optional) - currently playing match
+//   - lastSeen: timestamp or epoch number (required, >= 0) - last activity
+//   - createdAt: timestamp or epoch number (required, >= 0, immutable) - registration time
+//
+// Collection: matches
+// Document ID: {matchId}
+// Fields:
+//   - matchId: string (required, 1-128 chars) - match unique identifier
+//   - playerXId: string (required, 1-128 chars, immutable) - creator / Player X UID
+//   - playerOId: string (optional, 0-128 chars) - joining opponent / Player O UID
+//   - playerXName: string (required, 1-50 chars) - Player X name
+//   - playerOName: string (optional, 0-50 chars) - Player O name
+//   - playerXAvatar: string (optional, 0-500 chars) - Player X avatar URL
+//   - playerOAvatar: string (optional, 0-500 chars) - Player O avatar URL
+//   - currentTurn: string (required, 'X' or 'O') - active turn
+//   - board: list (required, exactly 9 elements of string length <= 1) - grid state
+//   - status: string (required, 'waiting' | 'in_progress' | 'finished' | 'abandoned')
+//   - winner: string (optional/nullable, 'X' | 'O' | 'draw') - match result
+//   - winningLine: list (optional/nullable, <= 3 ints) - winning indices
+//   - moves: list (optional, <= 9 items) - chronological move list
+//   - isPrivate: bool (optional, immutable) - private room flag
+//   - roomCode: string (optional/nullable, 0-10 chars, immutable) - 6-digit room code
+//   - drawOfferBy: string (optional/nullable, 0-128 chars) - UID offering draw
+//   - turnDeadline: number (optional, >= 0) - turn expiry timestamp
+//   - createdAt: timestamp or epoch number (required, >= 0, immutable)
+//   - updatedAt: timestamp or epoch number (required, >= 0)
+//
+// Subcollection: matches/{matchId}/moves/{moveId}
+// Document ID: {moveId}
+// Fields:
+//   - moveNumber: number (required, 1 to 9) - turn index
+//   - playerId: string (required, 1-128 chars) - moving player UID
+//   - symbol: string (required, 'X' or 'O') - player symbol
+//   - index: number (required, 0 to 8) - cell index
+//   - timestamp: timestamp or epoch number (required, >= 0)
+//
+// Subcollection: matches/{matchId}/messages/{messageId}
+// Document ID: {messageId}
+// Fields:
+//   - id: string (optional, 0-128 chars) - message ID
+//   - senderId: string (required, 1-128 chars) - sender UID
+//   - senderName: string (required, 1-50 chars) - sender name
+//   - text: string (required, 0-250 chars) - text or emoji reaction
+//   - isReaction: bool (optional) - whether message is quick reaction
+//   - emoji: string (optional, 0-20 chars) - emoji identifier
+//   - timestamp: timestamp or epoch number (required, >= 0)
+//
+// Collection: conversations/{conversationId}
+// Document ID: {conversationId} (Format: uid1_uid2, sorted lexicographically)
+// Fields:
+//   - lastMessage: string (required, 0-250 chars) - preview of last message
+//   - lastSenderId: string (required, 1-128 chars) - sender UID of last message
+//   - updatedAt: timestamp or epoch number (required, >= 0) - update timestamp
+//   - participants: list (optional, <= 2 strings) - participant UIDs
+//
+// Subcollection: conversations/{conversationId}/messages/{messageId}
+// Document ID: {messageId}
+// Fields:
+//   - id: string (optional, 0-128 chars) - message ID
+//   - senderId: string (required, 1-128 chars) - sender UID
+//   - senderName: string (required, 1-50 chars) - sender name
+//   - text: string (required, 1-250 chars) - message body
+//   - timestamp: timestamp or epoch number (required, >= 0)
+//
+// Collection: matchmakingQueue/{queueId}
+// Document ID: {queueId} (or auth UID)
+// Fields:
+//   - uid: string (required, 1-128 chars) - player UID
+//   - playerId: string (optional, 0-30 chars) - player ID code
+//   - displayName: string (optional, 0-50 chars) - player name
+//   - photoUrl: string (optional, 0-500 chars) - player avatar
+//   - createdAt: timestamp or epoch number (optional, >= 0)
+//   - status: string (optional, 'waiting' | 'matched' | 'cancelled')
+//
+// ===============================================================
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // ===============================================================
+    // Global Helper Functions
+    // ===============================================================
+
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+
+    function isOwner(userId) {
+      return isAuthenticated() && request.auth.uid == userId;
+    }
+
+    function hasRequiredFields(data, fields) {
+      return data.keys().hasAll(fields);
+    }
+
+    function hasOnlyAllowedFields(data, fields) {
+      return data.keys().hasOnly(fields);
+    }
+
+    function isValidTimestampOrEpoch(val) {
+      return val is timestamp || (val is number && val >= 0);
+    }
+
+    function isConversationParticipant(conversationId) {
+      return isAuthenticated() && (
+        conversationId.matches('^' + request.auth.uid + '_.*') ||
+        conversationId.matches('^.*_' + request.auth.uid + '$') ||
+        (resource != null && 'participants' in resource.data &&
+         resource.data.participants is list &&
+         request.auth.uid in resource.data.participants)
+      );
+    }
+
+    function isMatchParticipant(matchData) {
+      return isAuthenticated() && (
+        matchData.playerXId == request.auth.uid ||
+        matchData.playerOId == request.auth.uid
+      );
+    }
+
+    function isMatchParticipantFromDoc(matchId) {
+      return isAuthenticated() &&
+        exists(/databases/$(database)/documents/matches/$(matchId)) &&
+        isMatchParticipant(get(/databases/$(database)/documents/matches/$(matchId)).data);
+    }
+
+    // ===============================================================
+    // Domain Validators (Applied to both create and update)
+    // ===============================================================
+
+    function isValidUserProfile(data) {
+      let allowed = [
+        'uid', 'playerId', 'username', 'displayName', 'photoUrl',
+        'gender', 'bio', 'country', 'level', 'xp',
+        'totalMatches', 'wins', 'losses', 'draws',
+        'currentStreak', 'bestStreak', 'isOnline', 'isInGame',
+        'lastSeen', 'createdAt'
+      ];
+      let required = ['uid', 'playerId', 'username', 'displayName', 'createdAt', 'lastSeen'];
+
+      return hasOnlyAllowedFields(data, allowed) &&
+        hasRequiredFields(data, required) &&
+        data.uid is string && data.uid.size() > 0 && data.uid.size() <= 128 &&
+        data.playerId is string && data.playerId.size() >= 3 && data.playerId.size() <= 20 &&
+        data.username is string && data.username.size() >= 1 && data.username.size() <= 30 &&
+        data.displayName is string && data.displayName.size() >= 1 && data.displayName.size() <= 50 &&
+        (!('photoUrl' in data) || (data.photoUrl is string && data.photoUrl.size() <= 500)) &&
+        (!('gender' in data) || (data.gender is string && data.gender.size() <= 50)) &&
+        (!('bio' in data) || (data.bio is string && data.bio.size() <= 250)) &&
+        (!('country' in data) || (data.country is string && data.country.size() <= 100)) &&
+        (!('level' in data) || (data.level is number && data.level >= 1)) &&
+        (!('xp' in data) || (data.xp is number && data.xp >= 0)) &&
+        (!('totalMatches' in data) || (data.totalMatches is number && data.totalMatches >= 0)) &&
+        (!('wins' in data) || (data.wins is number && data.wins >= 0)) &&
+        (!('losses' in data) || (data.losses is number && data.losses >= 0)) &&
+        (!('draws' in data) || (data.draws is number && data.draws >= 0)) &&
+        (!('currentStreak' in data) || (data.currentStreak is number && data.currentStreak >= 0)) &&
+        (!('bestStreak' in data) || (data.bestStreak is number && data.bestStreak >= 0)) &&
+        (!('isOnline' in data) || data.isOnline is bool) &&
+        (!('isInGame' in data) || data.isInGame is bool) &&
+        isValidTimestampOrEpoch(data.lastSeen) &&
+        isValidTimestampOrEpoch(data.createdAt);
+    }
+
+    function isValidGameMatch(data) {
+      let allowed = [
+        'matchId', 'playerXId', 'playerOId', 'playerXName', 'playerOName',
+        'playerXAvatar', 'playerOAvatar', 'currentTurn', 'board', 'status',
+        'winner', 'winningLine', 'moves', 'isPrivate', 'roomCode',
+        'drawOfferBy', 'turnDeadline', 'createdAt', 'updatedAt',
+        'rematchRequestedBy', 'rematchStatus', 'rematchExpiresAt'
+      ];
+      let required = [
+        'matchId', 'playerXId', 'playerXName', 'currentTurn',
+        'board', 'status', 'createdAt', 'updatedAt'
+      ];
+
+      return hasOnlyAllowedFields(data, allowed) &&
+        hasRequiredFields(data, required) &&
+        data.matchId is string && data.matchId.size() > 0 && data.matchId.size() <= 128 &&
+        data.playerXId is string && data.playerXId.size() > 0 && data.playerXId.size() <= 128 &&
+        (!('playerOId' in data) || (data.playerOId is string && data.playerOId.size() <= 128)) &&
+        data.playerXName is string && data.playerXName.size() >= 1 && data.playerXName.size() <= 50 &&
+        (!('playerOName' in data) || (data.playerOName is string && data.playerOName.size() <= 50)) &&
+        (!('playerXAvatar' in data) || (data.playerXAvatar is string && data.playerXAvatar.size() <= 500)) &&
+        (!('playerOAvatar' in data) || (data.playerOAvatar is string && data.playerOAvatar.size() <= 500)) &&
+        data.currentTurn in ['X', 'O'] &&
+        data.board is list && data.board.size() == 9 &&
+        data.status in ['waiting', 'in_progress', 'finished', 'abandoned'] &&
+        (!('winner' in data) || data.winner == null || data.winner in ['X', 'O', 'draw']) &&
+        (!('winningLine' in data) || data.winningLine == null || (data.winningLine is list && data.winningLine.size() <= 3)) &&
+        (!('moves' in data) || (data.moves is list && data.moves.size() <= 9)) &&
+        (!('isPrivate' in data) || data.isPrivate is bool) &&
+        (!('roomCode' in data) || data.roomCode == null || (data.roomCode is string && data.roomCode.size() <= 10)) &&
+        (!('drawOfferBy' in data) || data.drawOfferBy == null || (data.drawOfferBy is string && data.drawOfferBy.size() <= 128)) &&
+        (!('turnDeadline' in data) || (data.turnDeadline is number && data.turnDeadline >= 0)) &&
+        (!('rematchRequestedBy' in data) || data.rematchRequestedBy == null || (data.rematchRequestedBy is string && data.rematchRequestedBy.size() <= 128)) &&
+        (!('rematchStatus' in data) || data.rematchStatus == null || (data.rematchStatus is string && data.rematchStatus in ['pending', 'accepted', 'declined'])) &&
+        (!('rematchExpiresAt' in data) || (data.rematchExpiresAt is number && data.rematchExpiresAt >= 0)) &&
+        isValidTimestampOrEpoch(data.createdAt) &&
+        isValidTimestampOrEpoch(data.updatedAt);
+    }
+
+    function isValidMove(data) {
+      let allowed = ['moveNumber', 'playerId', 'symbol', 'index', 'timestamp'];
+      return hasOnlyAllowedFields(data, allowed) &&
+        hasRequiredFields(data, allowed) &&
+        data.moveNumber is number && data.moveNumber >= 1 && data.moveNumber <= 9 &&
+        data.playerId is string && data.playerId.size() > 0 && data.playerId.size() <= 128 &&
+        data.symbol in ['X', 'O'] &&
+        data.index is number && data.index >= 0 && data.index <= 8 &&
+        isValidTimestampOrEpoch(data.timestamp);
+    }
+
+    function isValidChatMessage(data) {
+      let allowed = ['id', 'senderId', 'senderName', 'text', 'isReaction', 'emoji', 'timestamp'];
+      let required = ['senderId', 'senderName', 'text', 'timestamp'];
+      return hasOnlyAllowedFields(data, allowed) &&
+        hasRequiredFields(data, required) &&
+        (!('id' in data) || (data.id is string && data.id.size() <= 128)) &&
+        data.senderId is string && data.senderId.size() > 0 && data.senderId.size() <= 128 &&
+        data.senderName is string && data.senderName.size() >= 1 && data.senderName.size() <= 50 &&
+        data.text is string && data.text.size() <= 250 &&
+        (!('isReaction' in data) || data.isReaction is bool) &&
+        (!('emoji' in data) || (data.emoji is string && data.emoji.size() <= 20)) &&
+        isValidTimestampOrEpoch(data.timestamp);
+    }
+
+    function isValidConversation(data) {
+      let allowed = ['lastMessage', 'lastSenderId', 'updatedAt', 'participants'];
+      let required = ['lastMessage', 'lastSenderId', 'updatedAt'];
+      return hasOnlyAllowedFields(data, allowed) &&
+        hasRequiredFields(data, required) &&
+        data.lastMessage is string && data.lastMessage.size() <= 250 &&
+        data.lastSenderId is string && data.lastSenderId.size() > 0 && data.lastSenderId.size() <= 128 &&
+        isValidTimestampOrEpoch(data.updatedAt) &&
+        (!('participants' in data) || (data.participants is list && data.participants.size() <= 2));
+    }
+
+    function isValidQueueEntry(data) {
+      let allowed = ['uid', 'playerId', 'displayName', 'photoUrl', 'createdAt', 'status'];
+      return hasOnlyAllowedFields(data, allowed) &&
+        hasRequiredFields(data, ['uid']) &&
+        data.uid is string && data.uid.size() > 0 && data.uid.size() <= 128 &&
+        (!('playerId' in data) || (data.playerId is string && data.playerId.size() <= 30)) &&
+        (!('displayName' in data) || (data.displayName is string && data.displayName.size() <= 50)) &&
+        (!('photoUrl' in data) || (data.photoUrl is string && data.photoUrl.size() <= 500)) &&
+        (!('createdAt' in data) || isValidTimestampOrEpoch(data.createdAt)) &&
+        (!('status' in data) || (data.status is string && data.status in ['waiting', 'matched', 'cancelled']));
+    }
+
+    function isValidChallenge(data) {
+      let allowed = [
+        'challengeId', 'fromUid', 'fromPlayerId', 'fromName', 'fromAvatar',
+        'toUid', 'toName', 'matchId', 'status', 'createdAt', 'expiresAt'
+      ];
+      let required = ['challengeId', 'fromUid', 'fromName', 'toUid', 'matchId', 'status', 'createdAt', 'expiresAt'];
+      return hasOnlyAllowedFields(data, allowed) &&
+        hasRequiredFields(data, required) &&
+        data.challengeId is string && data.challengeId.size() > 0 && data.challengeId.size() <= 128 &&
+        data.fromUid is string && data.fromUid.size() > 0 && data.fromUid.size() <= 128 &&
+        data.fromName is string && data.fromName.size() >= 1 && data.fromName.size() <= 50 &&
+        (!('fromPlayerId' in data) || (data.fromPlayerId is string && data.fromPlayerId.size() <= 30)) &&
+        (!('fromAvatar' in data) || (data.fromAvatar is string && data.fromAvatar.size() <= 500)) &&
+        data.toUid is string && data.toUid.size() > 0 && data.toUid.size() <= 128 &&
+        (!('toName' in data) || (data.toName is string && data.toName.size() <= 50)) &&
+        data.matchId is string && data.matchId.size() > 0 && data.matchId.size() <= 128 &&
+        data.status in ['pending', 'accepted', 'declined', 'cancelled', 'expired'] &&
+        isValidTimestampOrEpoch(data.createdAt) &&
+        (data.expiresAt is number && data.expiresAt >= 0);
+    }
+
+    // ===============================================================
+    // Root Match: Default Deny All Unmatched
+    // ===============================================================
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // ===============================================================
+    // Collection 1: users/{uid}
+    // ===============================================================
+    match /users/{uid} {
+      // Any authenticated user can read public profiles for matchmaking & leaderboard
+      allow read: if isAuthenticated();
+
+      // Only the profile owner can create their document with matching UID
+      allow create: if isOwner(uid) &&
+        request.resource.data.uid == uid &&
+        isValidUserProfile(request.resource.data);
+
+      // Only the profile owner can update; UID and createdAt cannot be altered
+      allow update: if isOwner(uid) &&
+        request.resource.data.uid == resource.data.uid &&
+        request.resource.data.createdAt == resource.data.createdAt &&
+        isValidUserProfile(request.resource.data);
+
+      allow delete: if false;
+    }
+
+    // ===============================================================
+    // Collection 2: matches/{matchId}
+    // ===============================================================
+    match /matches/{matchId} {
+      // Authenticated users can read open waiting matches;
+      // Active and finished matches are readable only by match participants
+      allow read: if isAuthenticated() && (
+        resource == null ||
+        resource.data.status == 'waiting' ||
+        isMatchParticipant(resource.data)
+      );
+
+      // Any authenticated user can create a match as player X in waiting status
+      allow create: if isAuthenticated() &&
+        request.resource.data.playerXId == request.auth.uid &&
+        request.resource.data.status == 'waiting' &&
+        (!('playerOId' in request.resource.data) || request.resource.data.playerOId == '' || (request.resource.data.playerOId is string && request.resource.data.playerOId.size() <= 128)) &&
+        isValidGameMatch(request.resource.data);
+
+      // Updates are permitted in two scenarios:
+      // 1. Another authenticated user joins an open waiting match as Player O (or accepts challenge)
+      // 2. Existing match participants update match progress/moves/completion/rematch
+      allow update: if isAuthenticated() &&
+        isValidGameMatch(request.resource.data) && (
+          // Scenario 1: Joining open waiting match
+          (
+            resource.data.status == 'waiting' &&
+            (resource.data.playerOId == '' || resource.data.playerOId == request.auth.uid) &&
+            resource.data.playerXId != request.auth.uid &&
+            request.resource.data.playerOId == request.auth.uid &&
+            request.resource.data.status == 'in_progress' &&
+            request.resource.data.playerXId == resource.data.playerXId &&
+            request.resource.data.createdAt == resource.data.createdAt &&
+            request.resource.data.isPrivate == resource.data.isPrivate &&
+            request.resource.data.roomCode == resource.data.roomCode
+          ) ||
+          // Scenario 2: Participant gameplay / state update
+          (
+            isMatchParticipant(resource.data) &&
+            request.resource.data.playerXId == resource.data.playerXId &&
+            request.resource.data.playerOId == resource.data.playerOId &&
+            request.resource.data.createdAt == resource.data.createdAt &&
+            request.resource.data.isPrivate == resource.data.isPrivate &&
+            request.resource.data.roomCode == resource.data.roomCode
+          )
+        );
+
+      // Only creator can cancel/delete a waiting match
+      allow delete: if isAuthenticated() &&
+        resource.data.playerXId == request.auth.uid &&
+        (resource.data.status == 'waiting' || resource.data.status == 'abandoned');
+
+      // -------------------------------------------------------------
+      // Subcollection: matches/{matchId}/moves/{moveId}
+      // -------------------------------------------------------------
+      match /moves/{moveId} {
+        allow read: if isMatchParticipantFromDoc(matchId);
+
+        allow create: if isMatchParticipantFromDoc(matchId) &&
+          request.resource.data.playerId == request.auth.uid &&
+          isValidMove(request.resource.data);
+
+        allow update, delete: if false;
+      }
+
+      // -------------------------------------------------------------
+      // Subcollection: matches/{matchId}/messages/{messageId}
+      // -------------------------------------------------------------
+      match /messages/{messageId} {
+        allow read: if isMatchParticipantFromDoc(matchId);
+
+        allow create: if isMatchParticipantFromDoc(matchId) &&
+          request.resource.data.senderId == request.auth.uid &&
+          isValidChatMessage(request.resource.data);
+
+        allow update, delete: if false;
+      }
+    }
+
+    // ===============================================================
+    // Collection 3: conversations/{conversationId}
+    // ===============================================================
+    match /conversations/{conversationId} {
+      // Only conversation participants can read conversation metadata
+      allow read: if isConversationParticipant(conversationId);
+
+      // Participants can create/update conversation metadata (e.g. lastMessage preview)
+      allow create: if isConversationParticipant(conversationId) &&
+        request.resource.data.lastSenderId == request.auth.uid &&
+        isValidConversation(request.resource.data);
+
+      allow update: if isConversationParticipant(conversationId) &&
+        request.resource.data.lastSenderId == request.auth.uid &&
+        isValidConversation(request.resource.data);
+
+      allow delete: if false;
+
+      // -------------------------------------------------------------
+      // Subcollection: conversations/{conversationId}/messages/{messageId}
+      // -------------------------------------------------------------
+      match /messages/{messageId} {
+        allow read: if isConversationParticipant(conversationId);
+
+        allow create: if isConversationParticipant(conversationId) &&
+          request.resource.data.senderId == request.auth.uid &&
+          isValidChatMessage(request.resource.data);
+
+        allow update, delete: if false;
+      }
+    }
+
+    // ===============================================================
+    // Collection 4: matchmakingQueue/{queueId}
+    // ===============================================================
+    match /matchmakingQueue/{queueId} {
+      // Authenticated users can create, read, and delete their own queue entries
+      allow read: if isAuthenticated() && (
+        resource.data.uid == request.auth.uid ||
+        queueId == request.auth.uid
+      );
+
+      allow create: if isAuthenticated() &&
+        (request.resource.data.uid == request.auth.uid || queueId == request.auth.uid) &&
+        isValidQueueEntry(request.resource.data);
+
+      allow update: if isAuthenticated() &&
+        (resource.data.uid == request.auth.uid || queueId == request.auth.uid) &&
+        request.resource.data.uid == resource.data.uid &&
+        isValidQueueEntry(request.resource.data);
+
+      allow delete: if isAuthenticated() && (
+        resource.data.uid == request.auth.uid ||
+        queueId == request.auth.uid
+      );
+    }
+
+    // ===============================================================
+    // Collection 5: challenges/{challengeId}
+    // ===============================================================
+    match /challenges/{challengeId} {
+      allow read: if isAuthenticated() && (
+        resource.data.fromUid == request.auth.uid ||
+        resource.data.toUid == request.auth.uid
+      );
+
+      allow create: if isAuthenticated() &&
+        request.resource.data.fromUid == request.auth.uid &&
+        request.resource.data.status == 'pending' &&
+        isValidChallenge(request.resource.data);
+
+      allow update: if isAuthenticated() && (
+        resource.data.fromUid == request.auth.uid ||
+        resource.data.toUid == request.auth.uid
+      ) && isValidChallenge(request.resource.data);
+
+      allow delete: if isAuthenticated() &&
+        resource.data.fromUid == request.auth.uid;
+    }
+  }
+}
